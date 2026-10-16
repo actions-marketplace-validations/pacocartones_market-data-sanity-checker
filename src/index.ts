@@ -33,11 +33,12 @@ export {
   parseYahooChart,
   parseAlphaVantageDaily,
 } from './connectors/index'
-export type { Connector, FetchOptions } from './connectors/index'
+export type { Connector, ConnectorStatus, FetchOptions } from './connectors/index'
 
 export { computeSanityScore, summarize, SEVERITY_PENALTY } from './scoring/score'
 
 export { renderCheckHtml, renderCompareHtml } from './report/html'
+export { renderReportMarkdown, renderCompareMarkdown } from './report/markdown'
 
 export {
   appendHistory,

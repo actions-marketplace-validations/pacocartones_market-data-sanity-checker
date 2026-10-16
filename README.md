@@ -4,14 +4,15 @@
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/pacocartones/market-data-sanity-checker/badge)](https://scorecard.dev/viewer/?uri=github.com/pacocartones/market-data-sanity-checker)
 [![GitHub Marketplace](https://img.shields.io/badge/Marketplace-Market%20Data%20Sanity%20Checker-blue?logo=github)](https://github.com/marketplace/actions/market-data-sanity-checker)
 [![npm version](https://img.shields.io/npm/v/market-data-sanity-checker)](https://www.npmjs.com/package/market-data-sanity-checker)
-[![npm downloads](https://img.shields.io/npm/dm/market-data-sanity-checker)](https://www.npmjs.com/package/market-data-sanity-checker)
 [![node version](https://img.shields.io/node/v/market-data-sanity-checker)](https://nodejs.org)
-[![Coverage](https://img.shields.io/badge/coverage-check%20status-blue)](https://github.com/pacocartones/market-data-sanity-checker/actions/workflows/ci.yml)
+[![coverage (lines)](https://img.shields.io/endpoint?url=https%3A%2F%2Fpacocartones.github.io%2Fmarket-data-sanity-checker%2Fcoverage-badge.json)](RELEASING.md#coverage-badge)
 [![API Docs](https://img.shields.io/badge/docs-API%20reference-success)](https://pacocartones.github.io/market-data-sanity-checker/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 > **Trust layer for market data.** Validate, score and explain anomalies in OHLCV, dividends,
 > splits and fundamentals — before they break your screener, dashboard or tracker.
+
+[Quickstart](#quickstart-30-seconds) · [Rule catalog](#rule-catalog) · [Contribute: good first issues](https://github.com/pacocartones/market-data-sanity-checker/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
 
 <img src="docs/assets/trust-layer-flow.svg" alt="Architecture: market data sources (Yahoo Finance, Alpha Vantage, your CSV/JSON) flow into mdsc — the trust layer that validates with 37 rules, scores 0-100, explains with evidence and recommends block/flag/review — and only then into your backtests, screeners, dashboards and ML pipelines, with CI gating via exit codes" width="860">
 
@@ -38,7 +39,7 @@ works offline, interactive chart, no server.*
 
 ## Quickstart (30 seconds)
 
-No install, no API key — audit a live symbol straight from Yahoo Finance:
+No install, no API key — audit a live symbol straight from Yahoo Finance. Requires Node.js 22.12 or newer:
 
 ```bash
 npx market-data-sanity-checker check --provider yahoo --symbol AAPL
@@ -65,18 +66,23 @@ pence/pounds ×100 — each reproducible from the shipped fixtures.
 
 Market data is wrong more often than you think:
 
-- **June 3, 2024** — a SIP software bug showed Berkshire Hathaway (BRK.A) at **$185** instead
-  of ~$621,000 (−99.9%). Trades executed on the bad price cost Interactive Brokers **$48M**.
-- **July 3, 2017** — Nasdaq test data propagated to Google Finance, Bloomberg and Yahoo,
-  showing AAPL, GOOG and MSFT all at **$123.47**.
-- Yahoo Finance regularly ships **unadjusted splits** that look like −50% crashes, dividends
-  scaled **100×** (the classic LSE pence/pounds confusion), and duplicated dividends.
-- Tickers get **reused** (`AB` has named 6 different companies), silently splicing two firms
-  into one price series.
+- **June 3, 2024** — a technical issue with price bands published by the CTA SIP triggered trading
+  halts, and Berkshire Hathaway (BRK.A) briefly showed a drop of about 99.9%
+  ([The Stack](https://www.thestack.technology/nyse-glitch-cause/)).
+- **July 3, 2017** — Nasdaq said third parties had improperly used test data; several large stocks,
+  including Apple, Alphabet, Amazon, Microsoft and eBay, appeared at implausible prices on some
+  financial news websites, Alphabet and eBay at **$123.47**, while actual prices were unaffected
+  ([Fortune, 2017-07-04](https://fortune.com/2017/07/04/nasdaq-glitch-stocks-crash-tech-companies)).
+- Real cases documented by the yfinance project include a split recorded without adjusting earlier
+  prices (MOB.ST, 2023), London series switching between pounds and pence (AET.L) and a duplicated
+  dividend (ALC.SW); every fixture lists its source in [docs/fixtures.md](docs/fixtures.md).
+- Tickers get **reused** (`AB` has named at least 6 different companies,
+  [Crucible Research](https://www.crucible-research.com/nasdaq-100-historical-constituents)),
+  silently splicing two firms into one price series.
 
 Generic data quality tools (Great Expectations, Soda, Pandera) check structure — nulls,
-ranges, schemas. Data vendors (yfinance, ccxt) fetch data but don't audit it. Nothing open
-source sits in between. `mdsc` is that missing layer.
+ranges, schemas. Data vendors (yfinance, ccxt) mainly fetch data. `mdsc` is built for the layer
+in between: checks that know about splits, dividends, currencies and exchange calendars.
 
 ## Principles
 
@@ -114,9 +120,11 @@ mdsc compare --files yahoo-aapl.json,stooq-aapl.csv
 
 # machine-readable report
 mdsc check --file aapl.json --format json > report.json
+mdsc check --file aapl.json --format markdown
 
 # provider status and rule catalog
 mdsc providers
+mdsc providers --format json         # includes each provider's daily_request_limit (null = no cap)
 mdsc rules
 mdsc rules SERIES_TAIL_TRUNCATED     # one rule by id (case-insensitive)
 mdsc rules --format json | jq '.single_source[].id'
@@ -133,8 +141,9 @@ Providers are plugins: `yahoo` works keyless; `alpha-vantage` needs the
 `ALPHA_VANTAGE_API_KEY` env var. A free key (alphavantage.co) returns the latest 100 daily
 bars, unadjusted and without dividends or splits; Alpha Vantage serves the adjusted series
 with corporate actions and full history only to premium keys, so with one set
-`ALPHA_VANTAGE_PREMIUM=true` as well. New providers plug in via the `Connector` contract
-(`src/connectors/types.ts`).
+`ALPHA_VANTAGE_PREMIUM=true` as well. Free keys default to a 25 requests/day cap; override it
+with `ALPHA_VANTAGE_DAILY_LIMIT=<positive integer>` if your key allows more. New providers plug
+in via the `Connector` contract (`src/connectors/types.ts`).
 
 ### Configuration (`mdsc.config.json`)
 
@@ -184,7 +193,7 @@ mdsc compare --files yahoo-aapl.json,stooq-aapl.csv --html compare.html   # writ
 Fail a workflow when a data file is bad, with the score and finding counts in the job summary. It is listed on the [GitHub Marketplace](https://github.com/marketplace/actions/market-data-sanity-checker).
 
 ```yaml
-- uses: pacocartones/market-data-sanity-checker@a8f95bcc0aec8d8e558ebb3de421b8b62531970f # v1.6.0
+- uses: pacocartones/market-data-sanity-checker@80f2bb54bc03bc3ce6c7445402c88b2b644e1a0f # v1.7.0
   with:
     file: data/prices.csv
     fail-on: warning # critical (default) | warning | info
@@ -280,12 +289,12 @@ zero; the finding carries `occurrences` instead.
 
 ## Rule catalog
 
-The corpus ships **37 rules**: 29 single-source across four blocks, plus 8 multi-source
+The corpus ships **38 rules**: 30 single-source across four blocks, plus 8 multi-source
 compare rules. Full details with defaults and references: `mdsc rules` (or
 `--format json`). Real-case fixtures anchor the headline rules:
 [`tests/fixtures/`](tests/fixtures/), documented in [`docs/fixtures.md`](docs/fixtures.md).
 
-### Price / OHLCV (13)
+### Price / OHLCV (14)
 
 | Rule | Severity | What it catches |
 |---|---|---|
@@ -299,6 +308,7 @@ compare rules. Full details with defaults and references: `mdsc rules` (or
 | `CURRENCY_SCALE_SUSPECT` | warning | Persistent ~100× level shifts — pence/pounds (GBX/GBP) block confusion |
 | `STALE_PRICE` | warning | Identical close for 3+ sessions with volume — frozen feed (`info` when the price is frozen with volume 0 for more than 10 sessions) |
 | `BAR_MISSING` | warning | Gaps of a full trading week or more |
+| `BAR_ON_WEEKEND` | info | Daily bar dated on a non-trading weekday (usually a timezone shift). Bars with a time of day are skipped; the rule reads daily, date-only bars |
 | `TS_UNORDERED` | warning | Bars out of chronological order |
 | `ZERO_VOLUME_MOVED` | warning | Zero volume but price moved intraday |
 | `INSUFFICIENT_DATA` | warning | Too few bars to evaluate plausibility — the score reflects absence of evidence |

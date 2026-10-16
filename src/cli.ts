@@ -14,6 +14,7 @@ import { compareRegistry } from './compare/registry'
 import { connectorStatus, getConnector } from './connectors/index'
 import { loadConfig, type MdscConfig } from './config'
 import { renderCheckHtml, renderCompareHtml } from './report/html'
+import { renderReportMarkdown, renderCompareMarkdown } from './report/markdown'
 import {
   appendHistory,
   readHistory,
@@ -121,6 +122,15 @@ interface GatingOptions {
 }
 
 /**
+ * True only for the three severity names. `value in SEVERITY_ORDER` also accepts inherited
+ * Object.prototype keys ("constructor", "toString", "__proto__"), which made `--fail-on constructor`
+ * pass validation, count 0 findings and exit 0 on data with critical findings.
+ */
+function isSeverity(value: string): value is Severity {
+  return Object.hasOwn(SEVERITY_ORDER, value)
+}
+
+/**
  * CI gating ("alerts"). Exit 1 when: any critical finding (default), or any
  * finding at or above --fail-on severity, or score below --min-score.
  * Returns the exit code and prints the reason to stderr.
@@ -134,7 +144,7 @@ function evaluateGating(
 
   if (options.failOn !== undefined) {
     const threshold = options.failOn as Severity
-    if (!(threshold in SEVERITY_ORDER)) {
+    if (!isSeverity(threshold)) {
       console.error(`mdsc: --fail-on must be one of: ${Object.keys(SEVERITY_ORDER).join(', ')}`)
       return 2
     }
@@ -166,7 +176,7 @@ function evaluateGating(
  * flag; returns null when every flag is OK.
  */
 function validateCommonFlags(options: GatingOptions & { format: string }): number | null {
-  if (options.failOn !== undefined && !(options.failOn in SEVERITY_ORDER)) {
+  if (options.failOn !== undefined && !isSeverity(options.failOn)) {
     console.error(`mdsc: --fail-on must be one of: ${Object.keys(SEVERITY_ORDER).join(', ')}`)
     return 2
   }
@@ -178,8 +188,8 @@ function validateCommonFlags(options: GatingOptions & { format: string }): numbe
     }
   }
   const format = options.format.toLowerCase()
-  if (format !== 'table' && format !== 'json') {
-    console.error('mdsc: --format must be one of: table, json')
+  if (format !== 'table' && format !== 'json' && format !== 'markdown') {
+    console.error('mdsc: --format must be one of: table, json, markdown')
     return 2
   }
   return null
@@ -215,7 +225,7 @@ program
   .option('--symbol <symbol>', 'symbol to fetch (required with --provider) or override for files')
   .option('--range <range>', 'history range for providers, e.g. 1mo, 1y, 5y', '1y')
   .option('--source <source>', 'data source name for provenance (files only)')
-  .option('--format <format>', 'output format: table | json', 'table')
+  .option('--format <format>', 'output format: table | json | markdown', 'table')
   .option('--config <path>', 'path to a config file (default: ./mdsc.config.json if present)')
   .option('--fail-on <severity>', 'exit 1 on findings at or above: critical | warning | info')
   .option('--min-score <n>', 'exit 1 when the sanity_score is below n (0-100)')
@@ -277,6 +287,8 @@ program
         : undefined
       if (format === 'json') {
         console.log(JSON.stringify(report, null, 2))
+      } else if (format === 'markdown') {
+        console.log(renderReportMarkdown(report))
       } else {
         printTable(report, coverage)
       }
@@ -308,7 +320,7 @@ program
   .option('--providers <a,b>', 'two providers, e.g. yahoo,alpha-vantage')
   .option('--files <a,b>', 'two local files (.csv/.json) to compare')
   .option('--range <range>', 'history range for providers, e.g. 1mo, 1y, 5y', '1y')
-  .option('--format <format>', 'output format: table | json', 'table')
+  .option('--format <format>', 'output format: table | json | markdown', 'table')
   .option('--config <path>', 'path to a config file (default: ./mdsc.config.json if present)')
   .option('--fail-on <severity>', 'exit 1 on findings at or above: critical | warning | info')
   .option('--min-score <n>', 'exit 1 when the consistency_score is below n (0-100)')
@@ -365,6 +377,8 @@ program
       const report = compareDatasets(a, b, config.compare)
       if (format === 'json') {
         console.log(JSON.stringify(report, null, 2))
+      } else if (format === 'markdown') {
+        console.log(renderCompareMarkdown(report))
       } else {
         printComparison(report)
       }
@@ -529,11 +543,37 @@ program
 
 program
   .command('providers')
-  .description('List available data providers and their status')
-  .action(() => {
+  .description('List available data providers, their status and daily request cap')
+  .option('--format <format>', 'output format: table | json', 'table')
+  .action((options: { format: string }) => {
+    // Same validation as the other commands: case-insensitive, unknown values exit 2.
+    const format = options.format.toLowerCase()
+    if (format !== 'table' && format !== 'json') {
+      console.error('mdsc: --format must be one of: table, json')
+      process.exitCode = 2
+      return
+    }
+    const statuses = connectorStatus()
+    if (format === 'json') {
+      console.log(
+        JSON.stringify(
+          statuses.map((status) => ({
+            name: status.name,
+            available: status.available,
+            requires: status.requires,
+            daily_request_limit: status.dailyRequestLimit,
+          })),
+          null,
+          2,
+        ),
+      )
+      return
+    }
     console.log()
-    for (const status of connectorStatus()) {
-      console.log(`  ${status.name.padEnd(16)} ${status.available ? 'ready' : `unavailable — requires ${status.requires}`}`)
+    for (const status of statuses) {
+      const cap = status.dailyRequestLimit === null ? '' : ` · ${status.dailyRequestLimit} requests/day`
+      const state = status.available ? `ready${cap}` : `unavailable — requires ${status.requires}`
+      console.log(`  ${status.name.padEnd(16)} ${state}`)
     }
     console.log()
   })

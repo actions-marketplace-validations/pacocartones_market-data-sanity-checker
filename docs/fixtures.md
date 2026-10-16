@@ -3,9 +3,13 @@
 Every fixture in [`tests/fixtures/`](../tests/fixtures/) reproduces a **documented
 real-world data failure**, reduced to the smallest dataset that exhibits it. They are
 the project's memory: each one anchors one or more rules to a case that actually
-happened and cost someone money, time or trust. Each of the 13 real-case JSON
+happened and cost someone money, time or trust. Each of the 16 real-case JSON
 fixtures has a hand-reviewed golden report in [`tests/golden/`](../tests/golden/)
 fixing the exact expected findings (see [`tests/golden.test.ts`](../tests/golden.test.ts)).
+A fixture that is minimal by design carries fewer than ten bars, so its golden
+also fixes the `INSUFFICIENT_DATA` warning from [`src/rules/price/insufficient-data.ts`](../src/rules/price/insufficient-data.ts)
+(`minBars: 10`) — that finding is expected, not a regression, and it is why
+`000020-ks-close-below-low.json`, a single bar, has two findings rather than one.
 
 Adding a rule? Add its fixture first — the contract is: no real-world case, no rule.
 
@@ -14,8 +18,11 @@ Adding a rule? Add its fixture first — the contract is: no real-world case, no
 | Fixture | Real case | Rules it anchors |
 |---|---|---|
 | `mob-st-unadjusted-split.json` | Yahoo logged MOB.ST's 2:1 split but never adjusted prior prices — a phantom −50% "crash" ([yfinance Price Repair](https://ranaroussi.github.io/yfinance/advanced/price_repair.html)) | `SPLIT_NOT_ADJUSTED` |
-| `berkshire-bad-tick.json` | 3-Jun-2024: a SIP software bug printed BRK.A at **$185.15** (~−99.97%); ~40 symbols affected, trades busted, IBKR lost $48M ([The Stack](https://www.thestack.technology/nyse-glitch-cause/)) | `PRICE_SPIKE_INTRADAY`, `RETURN_SPIKE` |
+| `berkshire-bad-tick.json` | 3-Jun-2024: a CTA SIP price-band issue triggered halts and BRK.A briefly showed a drop of about 99.9% ([The Stack](https://www.thestack.technology/nyse-glitch-cause/)); the fixture is a one-bar −99.97% drop (185.15) that reverts the next session | `PRICE_SPIKE_INTRADAY`, `RETURN_SPIKE` |
 | `aet-l-currency-scale.json` | Yahoo switches London series between £ and pence **in blocks** inside the same series (AET.L) ([yfinance Price Repair](https://ranaroussi.github.io/yfinance/advanced/price_repair.html), [GBX/GBP](https://forum.portfolio-performance.info/t/stock-prices-in-pence-gbx/14270)) | `CURRENCY_SCALE_SUSPECT` |
+| `ezj-l-gbx-to-gbp-switch.json` | EasyJet (London): permanent mid-series switch from pence to pounds on 22-Apr-2020; published prices, ticker inferred from company name ([yfinance#280](https://github.com/ranaroussi/yfinance/issues/280)) | `CURRENCY_SCALE_SUSPECT`, `SPLIT_NOT_ADJUSTED` |
+| `000020-ks-close-below-low.json` | 000020.KS (15-Jan-2024): Yahoo adjusted close (9878.71) printed below low (9907.54), raw close (10280.0) below low (10310.0); TradingView reported O=10340, H=10430, L=10210, C=10280. The thread does not establish which provider is right; AAPL rounding noise (~1e-17) is excluded as non-defective ([yfinance#2857](https://github.com/ranaroussi/yfinance/issues/2857)) | `OHLC_INCONSISTENT` |
+| `copec-sn-stale-price.json` | COPEC.SN (Santiago): frozen at the 2026-07-17 close (~6249.60 CLP) with volume 0 across following sessions after the exchange migration ([yfinance#2966](https://github.com/ranaroussi/yfinance/issues/2966)) | `STALE_PRICE` |
 
 ## Corporate actions
 
@@ -47,7 +54,9 @@ Adding a rule? Add its fixture first — the contract is: no real-world case, no
 |---|---|
 | `ohlcv-valid.csv` / `ohlcv-missing-columns.csv` | CSV ingestion contract (header aliases, required columns) |
 | `ohlcv-zero-volume-moved.csv` | Runnable example for ZERO_VOLUME_MOVED (intraday price movement with zero volume) |
+| `examples/example-authority.csv` / `examples/example-truncated.csv` | Runnable example for SERIES_TAIL_TRUNCATED (one source truncated early at its tail); synthetic made-up prices, no symbol, not real data for any ticker |
 | `bars-array.json` | Bare-array JSON ingestion; also anchors the degraded `CURRENCY_SUSPECT` info case (currency absent) |
+| `petr4-sa-dst-sunday-bar.json` | **Not real data.** A minimal synthetic reproduction of the shape described in yfinance [`fix_Yahoo_dst_issue`](https://github.com/ranaroussi/yfinance/blob/5cae563642b59f49adf6a04a5ad6744f8b0e084d/yfinance/utils.py#L902-L911) ("Yahoo has time off by few hours (e.g. Brazil 23:00 around Jan-2022)"): 24 invented ordinary Monday–Friday bars plus one Sunday-dated bar (`2022-01-09`). No price, volume or date was taken from PETR4.SA; the filename records the case it imitates, not its provenance. Anchors `BAR_ON_WEEKEND` with a golden that isolates it |
 
 ## Connector payloads
 

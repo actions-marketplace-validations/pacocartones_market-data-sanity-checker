@@ -37,10 +37,11 @@ interface CliResult {
 }
 
 /** Runs the compiled CLI; non-zero exits resolve (not reject) with their code. */
-async function runCli(args: string[], options: { cwd?: string } = {}): Promise<CliResult> {
+async function runCli(args: string[], options: { cwd?: string; env?: NodeJS.ProcessEnv } = {}): Promise<CliResult> {
   try {
     const { stdout, stderr } = await execFileAsync(process.execPath, [CLI, ...args], {
       cwd: options.cwd ?? REPO_ROOT,
+      env: options.env ?? process.env,
       maxBuffer: 16 * 1024 * 1024,
     })
     return { code: 0, stdout, stderr }
@@ -172,6 +173,17 @@ describe('check — gating exit codes', () => {
 })
 
 describe('check — early flag validation (exit 2, no report)', () => {
+  it.each(['constructor', 'toString', '__proto__', 'hasOwnProperty'])(
+    'rejects --fail-on %s (an inherited Object.prototype name) instead of passing the gate',
+    async (name) => {
+      const result = await runCli(['check', '--file', fixture('aet-l-currency-scale.json'), '--fail-on', name])
+      expect(result.code).toBe(2)
+      expect(result.stdout).toBe('')
+      expect(result.stderr).toContain('--fail-on must be one of')
+    },
+    CLI_TIMEOUT_MS,
+  )
+
   it(
     'rejects --fail-on bogus with exit 2 and empty stdout (nothing ran yet)',
     async () => {
@@ -482,4 +494,153 @@ describe('rules — catalog listing', () => {
     expect(result.stderr).toContain('unknown rule "ZZZ_NONEXISTENT_ZZZ"')
     expect(result.stderr).not.toMatch(/did you mean/)
   })
+})
+
+describe('compare — error paths and exit codes', () => {
+  it('exits 2 when --files has fewer than two paths', async () => {
+    const result = await runCli(['compare', '--files', 'one.csv'])
+    expect(result.code).toBe(2)
+    expect(result.stderr).toContain('--files needs exactly two paths separated by a comma')
+  })
+
+  it('exits 2 when neither --files nor --symbol is provided', async () => {
+    const result = await runCli(['compare'])
+    expect(result.code).toBe(2)
+    expect(result.stderr).toContain('--symbol is required when comparing providers')
+  })
+
+  it('exits 2 when --symbol is given without --providers', async () => {
+    const result = await runCli(['compare', '--symbol', 'AAPL'])
+    expect(result.code).toBe(2)
+    expect(result.stderr).toContain('--providers needs two providers')
+  })
+
+  it('exits 2 on invalid --format and keeps stdout empty', async () => {
+    const result = await runCli(['compare', '--files', 'a.csv,b.csv', '--format', 'bogus'])
+    expect(result.code).toBe(2)
+    expect(result.stdout).toBe('')
+    expect(result.stderr).toContain('--format must be one of: table, json, markdown')
+  })
+
+  it('exits 2 on invalid --fail-on and keeps stdout empty', async () => {
+    const result = await runCli(['compare', '--files', 'a.csv,b.csv', '--fail-on', 'bogus'])
+    expect(result.code).toBe(2)
+    expect(result.stdout).toBe('')
+    expect(result.stderr).toContain('--fail-on must be one of:')
+  })
+
+  it('exits 2 on invalid --min-score and keeps stdout empty', async () => {
+    const result = await runCli(['compare', '--files', 'a.csv,b.csv', '--min-score', '500'])
+    expect(result.code).toBe(2)
+    expect(result.stdout).toBe('')
+    expect(result.stderr).toContain('--min-score must be a number between 0 and 100')
+  })
+
+  it('exits 0 on happy path compare --files and prints consistency_score with --format json', async () => {
+    const validFile = fixture('ohlcv-valid.csv')
+    const result = await runCli(['compare', '--files', `${validFile},${validFile}`, '--format', 'json'])
+    expect(result.code).toBe(0)
+    expect(result.stdout).toContain('consistency_score')
+    const report = JSON.parse(result.stdout) as { consistency_score?: number }
+    expect(report.consistency_score).toBe(100)
+  })
+
+  it('renders markdown table on compare --files with --format markdown', async () => {
+    const validFile = fixture('ohlcv-valid.csv')
+    const result = await runCli(['compare', '--files', `${validFile},${validFile}`, '--format', 'markdown'])
+    expect(result.code).toBe(0)
+    expect(result.stdout).toContain('consistency_score: 100/100')
+    expect(result.stdout).toContain('No findings.')
+  })
+
+  it('renders markdown table on check --file with --format markdown (with findings and when clean)', async () => {
+    const cleanResult = await runCli(['check', '--file', fixture('ge-reverse-split.json'), '--format', 'markdown'])
+    expect(cleanResult.code).toBe(0)
+    expect(cleanResult.stdout).toContain('sanity_score: 100/100')
+    expect(cleanResult.stdout).toContain('No findings.')
+
+    const findingsResult = await runCli(['check', '--file', fixture('berkshire-bad-tick.json'), '--format', 'markdown'])
+    expect(findingsResult.code).toBe(1)
+    expect(findingsResult.stdout).toContain('| Rule | Severity | Date | Explanation |')
+    expect(findingsResult.stdout).toContain('PRICE_SPIKE_INTRADAY')
+  })
+
+  it('keeps a hostile --symbol inside the markdown heading line', async () => {
+    // The reproduction from the review of #200: --symbol reaches the heading verbatim
+    // and the output is read as markdown in a PR comment or GITHUB_STEP_SUMMARY. The
+    // csv fixture carries no symbol, so the override is the one that is rendered.
+    const hostile = 'AAPL\n\n[free prize](https://evil.example) <img src=x onerror=alert(1)>'
+    const result = await runCli(['check', '--file', fixture('ohlcv-valid.csv'), '--symbol', hostile, '--format', 'markdown'])
+    expect(result.code).toBe(0)
+    // one heading line, break collapsed to a space, markdown and html punctuation escaped
+    expect(result.stdout.split('\n')[0]).toBe(
+      '## AAPL \\[free prize\\](https://evil.example) \\<img src=x onerror=alert(1)\\> (csv) — sanity_score: 80/100',
+    )
+  })
+})
+
+describe('providers — --format', () => {
+  // A dummy key makes alpha-vantage "ready" without any network call; yahoo needs nothing and has no cap.
+  const envWith = (extra: Record<string, string>): NodeJS.ProcessEnv => {
+    const env: NodeJS.ProcessEnv = { ...process.env, ...extra }
+    if (!('ALPHA_VANTAGE_PREMIUM' in extra)) delete env.ALPHA_VANTAGE_PREMIUM
+    return env
+  }
+
+  it(
+    'prints each provider with daily_request_limit (a number for a capped one, null otherwise)',
+    async () => {
+      const result = await runCli(['providers', '--format', 'json'], {
+        env: envWith({ ALPHA_VANTAGE_API_KEY: 'dummy' }),
+      })
+      expect(result.code).toBe(0)
+      expect(result.stderr).toBe('')
+      const providers = JSON.parse(result.stdout) as Array<Record<string, unknown>>
+      const byName = Object.fromEntries(providers.map((p) => [p.name, p]))
+      expect(Object.keys(byName).sort()).toEqual(['alpha-vantage', 'yahoo'])
+      for (const provider of providers) {
+        expect(Object.keys(provider).sort()).toEqual(['available', 'daily_request_limit', 'name', 'requires'])
+        expect(typeof provider.requires).toBe('string')
+      }
+      expect(byName['alpha-vantage']).toMatchObject({ available: true, daily_request_limit: 25 })
+      expect(byName.yahoo).toMatchObject({ available: true, daily_request_limit: null })
+    },
+    CLI_TIMEOUT_MS,
+  )
+
+  it(
+    'reports null for alpha-vantage with a premium key (no daily cap)',
+    async () => {
+      const result = await runCli(['providers', '--format', 'JSON'], {
+        env: envWith({ ALPHA_VANTAGE_API_KEY: 'dummy', ALPHA_VANTAGE_PREMIUM: 'true' }),
+      })
+      expect(result.code).toBe(0)
+      const providers = JSON.parse(result.stdout) as Array<{ name: string; daily_request_limit: number | null }>
+      expect(providers.find((p) => p.name === 'alpha-vantage')?.daily_request_limit).toBeNull()
+    },
+    CLI_TIMEOUT_MS,
+  )
+
+  it(
+    'shows the cap after "ready" in the table, and nothing extra for a provider without one',
+    async () => {
+      const result = await runCli(['providers'], { env: envWith({ ALPHA_VANTAGE_API_KEY: 'dummy' }) })
+      expect(result.code).toBe(0)
+      const lines = result.stdout.split('\n')
+      expect(lines.find((line) => line.trim().startsWith('alpha-vantage'))).toMatch(/ready · 25 requests\/day$/)
+      expect(lines.find((line) => line.trim().startsWith('yahoo'))?.trimEnd()).toMatch(/ready$/)
+    },
+    CLI_TIMEOUT_MS,
+  )
+
+  it(
+    'rejects an unknown --format with exit 2 and empty stdout',
+    async () => {
+      const result = await runCli(['providers', '--format', 'xml'])
+      expect(result.code).toBe(2)
+      expect(result.stdout).toBe('')
+      expect(result.stderr).toContain('--format must be one of: table, json')
+    },
+    CLI_TIMEOUT_MS,
+  )
 })

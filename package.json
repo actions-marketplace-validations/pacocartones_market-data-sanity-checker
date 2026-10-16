@@ -58,6 +58,7 @@
         "prepack": "pnpm build",
         "dev": "tsx src/cli.ts",
         "test": "vitest run",
+        "test:property": "vitest run tests/property",
         "test:coverage": "vitest run --coverage",
         "test:watch": "vitest",
         "typecheck": "tsc --noEmit",
@@ -65,9 +66,12 @@
         "calibrate": "tsx scripts/calibrate.ts",
         "scoreboard": "tsx scripts/scoreboard.ts",
         "coverage:summary": "tsx scripts/generate-coverage-summary.ts",
+        "coverage:badge": "tsx scripts/coverage-badge.ts",
         "coverage:check": "pnpm test:coverage && pnpm coverage:summary",
         "smoke:readme": "tsx scripts/readme-smoke.ts",
-        "release-notes": "tsx scripts/release-notes.ts"
+        "release-notes": "tsx scripts/release-notes.ts",
+        "incidents:index": "tsx scripts/incidents-index.ts",
+        "incidents:check": "tsx scripts/incidents-index.ts --check"
     },
     "dependencies": {
         "commander": "^15.0.0",
@@ -75,12 +79,14 @@
         "zod": "^4.6.5"
     },
     "devDependencies": {
+        "@changesets/changelog-github": "^1.0.1",
         "@changesets/cli": "^3.0.3",
         "@eslint/js": "^10.0.1",
         "@types/node": "^22.20.4",
         "@types/papaparse": "^5.5.2",
         "@vitest/coverage-v8": "^4.1.11",
         "eslint": "^10.11.0",
+        "fast-check": "4.10.2",
         "tsup": "^8.5.1",
         "tsx": "^4.23.15",
         "typedoc": "^0.28.20",
